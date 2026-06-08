@@ -1,0 +1,13 @@
+[project]
+name = "u2d2-driver"
+version = "0.1.0"
+description = "Simple velocity + position driver for ROBOTIS U2D2 + Dynamixel Protocol 2.0"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "dynamixel-sdk>=3.7.31",
+    "pyserial>=3.5",
+]
+
+[tool.uv]
+# Declare deps here and run `uv sync`. Do not use `uv add`.
