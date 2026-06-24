@@ -1,0 +1,37 @@
+[project]
+name = "u2d2_driver_ros"
+version = "0.1.0"
+description = "ROS2 wrapper for u2d2_driver (U2D2 + Dynamixel X-series)"
+authors = [
+  {name = "Atar Babgei", email = "atarbabgei@gmail.com"}
+]
+license = {text = "MIT"}
+requires-python = "==3.10.*"
+dependencies = [
+  "u2d2-driver",
+]
+
+[tool.uv.sources]
+u2d2-driver = { path = "../../..", editable = true }
+
+[project.scripts]
+u2d2_node = "u2d2_driver_ros.u2d2_node:main"
+
+[tool.colcon-uv-ros]
+name = "u2d2_driver_ros"
+
+[tool.colcon-uv-ros.dependencies]
+depend = ["rclpy", "std_msgs", "sensor_msgs"]
+exec_depend = ["u2d2-driver"]
+test_depend = ["pytest"]
+
+[tool.colcon-uv-ros.data-files]
+"share/ament_index/resource_index/packages" = ["resource/u2d2_driver_ros"]
+"share/u2d2_driver_ros" = ["package.xml", "launch"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["u2d2_driver_ros"]
