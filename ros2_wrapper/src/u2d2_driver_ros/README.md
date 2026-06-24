@@ -22,8 +22,8 @@ source install/setup.bash
 ## Run
 
 ```bash
-ros2 launch u2d2_driver_ros u2d2.launch.py                 # ID 1, auto port + baud
-ros2 launch u2d2_driver_ros u2d2.launch.py baud:=57600 ids:="[1,2]"
+ros2 launch u2d2_driver_ros u2d2.launch.py                 # ID 1 @ 57600, auto port
+ros2 launch u2d2_driver_ros u2d2.launch.py ids:="[1,2]" baud:=0   # two motors, auto-scan baud
 ```
 
 ### Launch arguments
@@ -32,7 +32,7 @@ ros2 launch u2d2_driver_ros u2d2.launch.py baud:=57600 ids:="[1,2]"
 |-----------------------|---------|----------------------------------------------------|
 | `namespace`           | `u2d2`  | Topic prefix (`/u2d2/...`).                         |
 | `port`                | `''`    | Serial port; empty = autodetect FTDI/ttyUSB.       |
-| `baud`                | `0`     | Baud rate; `0` = scan common bauds and auto-detect.|
+| `baud`                | `57600` | Baud rate; `0` = scan common bauds and auto-detect.|
 | `ids`                 | `[1]`   | Motor IDs, e.g. `ids:="[1,2]"`.                     |
 | `profile_vel`         | `0.0`   | Position travel speed (rpm); `0` = max.            |
 | `publish_rate`        | `20.0`  | `joint_states` rate (Hz); `0` disables telemetry.  |

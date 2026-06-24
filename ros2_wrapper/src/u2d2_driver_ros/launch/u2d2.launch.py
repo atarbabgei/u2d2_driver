@@ -15,7 +15,7 @@ from launch_ros.actions import Node
 PARAMS = [
     {'name': 'namespace',           'default': 'u2d2',  'description': 'namespace / topic prefix'},
     {'name': 'port',                'default': "''",    'description': "serial port ('' = autodetect)"},
-    {'name': 'baud',                'default': '0',     'description': 'baud rate (0 = auto-scan common bauds)'},
+    {'name': 'baud',                'default': '57600', 'description': 'baud rate (0 = auto-scan common bauds)'},
     {'name': 'ids',                 'default': '[1]',   'description': 'motor IDs, e.g. [1,2]'},
     {'name': 'profile_vel',         'default': '0.0',   'description': 'position travel speed rpm (0 = max)'},
     {'name': 'publish_rate',        'default': '20.0',  'description': 'joint_states rate Hz (0 = off)'},
