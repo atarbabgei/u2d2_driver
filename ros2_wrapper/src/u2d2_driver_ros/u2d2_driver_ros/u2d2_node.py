@@ -106,10 +106,31 @@ class U2D2Node(Node):
         return None
 
     def _ensure_mode(self, dxl_id: int, mode: int) -> None:
-        """Switch a motor's operating mode only when it actually changes;
-        switching toggles torque, so we avoid doing it per streamed command."""
-        if self._mode.get(dxl_id) == mode:
+        """Make sure the motor is actually in `mode` with torque on, then
+        cache it. We can't just trust the cache: a power/comms blip (the same
+        event that shows up as a dropped read) can reset the motor, clearing
+        torque and falling back to a default operating mode while our cache
+        still says otherwise -- after which goal writes succeed on the wire but
+        the motor never moves. So read the real operating mode + torque and
+        only re-apply (which toggles torque) when something has drifted, so
+        streamed velocity commands still don't thrash torque in the normal
+        case."""
+        try:
+            actual_mode = self._driver.operating_mode(dxl_id)
+            torque_on = self._driver.torque_is_on(dxl_id)
+        except Exception:
+            actual_mode, torque_on = None, False
+
+        if actual_mode == mode and torque_on:
+            self._mode[dxl_id] = mode
             return
+
+        if self._mode.get(dxl_id) == mode:
+            self.get_logger().warning(
+                f'[ID {dxl_id}] motor state drifted (mode={actual_mode}, '
+                f'torque_on={torque_on}); re-applying mode {mode} '
+                '(motor reset? check power supply)')
+
         if mode == OP_MODE_VELOCITY:
             self._driver.enable_velocity_mode(dxl_id)
         else:

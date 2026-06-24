@@ -152,11 +152,24 @@ class Driver:
             lambda: self.packet.write4ByteTxRx(self.port, dxl_id, addr, value))
         self._check(dxl_id, comm, err, what)
 
+    def read1(self, dxl_id: int, addr: int, what: str) -> int:
+        value, comm, err = self._txrx(
+            lambda: self.packet.read1ByteTxRx(self.port, dxl_id, addr))
+        self._check(dxl_id, comm, err, what)
+        return value
+
     def read4(self, dxl_id: int, addr: int, what: str) -> int:
         value, comm, err = self._txrx(
             lambda: self.packet.read4ByteTxRx(self.port, dxl_id, addr))
         self._check(dxl_id, comm, err, what)
         return value
+
+    def operating_mode(self, dxl_id: int) -> int:
+        return self.read1(dxl_id, ADDR_OPERATING_MODE, "read operating mode")
+
+    def torque_is_on(self, dxl_id: int) -> bool:
+        return self.read1(dxl_id, ADDR_TORQUE_ENABLE,
+                          "read torque enable") == TORQUE_ENABLE
 
     # -- discovery --------------------------------------------------------
     def ping(self, dxl_id: int, retries: int = 3) -> bool:
