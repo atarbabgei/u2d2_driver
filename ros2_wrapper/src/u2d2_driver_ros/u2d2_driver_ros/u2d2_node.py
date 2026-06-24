@@ -72,6 +72,12 @@ class U2D2Node(Node):
         # toggle torque (and thus the operating mode) on every message.
         self._mode: dict[int, int] = {}
 
+        # Active position/turn goal per id (absolute degrees) and the set of
+        # ids that have already reached it -- used to log arrival once.
+        self._goal: dict[int, float] = {}
+        self._reached: set[int] = set()
+        self._goal_tol_deg = 1.0
+
         self.create_subscription(Float64MultiArray, 'cmd_velocity',
                                  self._on_velocity, 10)
         self.create_subscription(Float64MultiArray, 'cmd_position',
@@ -121,7 +127,9 @@ class U2D2Node(Node):
             try:
                 self._ensure_mode(i, OP_MODE_VELOCITY)
                 self._driver.set_velocity(i, float(rpm))
-            except RuntimeError as exc:
+                self._goal.pop(i, None)  # velocity has no position goal
+                self._reached.discard(i)
+            except Exception as exc:
                 self.get_logger().warning(f'[ID {i}] cmd_velocity failed: {exc}')
 
     def _on_position(self, msg: Float64MultiArray) -> None:
@@ -131,8 +139,9 @@ class U2D2Node(Node):
         for i, deg in goals.items():
             try:
                 self._ensure_mode(i, OP_MODE_EXTENDED_POSITION)
-                self._driver.move_shortest_to(i, float(deg))
-            except RuntimeError as exc:
+                target = self._driver.move_shortest_to(i, float(deg))
+                self._set_goal(i, target)
+            except Exception as exc:
                 self.get_logger().warning(f'[ID {i}] cmd_position failed: {exc}')
 
     def _on_turn(self, msg: Float64MultiArray) -> None:
@@ -142,9 +151,15 @@ class U2D2Node(Node):
         for i, deg in goals.items():
             try:
                 self._ensure_mode(i, OP_MODE_EXTENDED_POSITION)
-                self._driver.turn_by(i, float(deg))
-            except RuntimeError as exc:
+                target = self._driver.turn_by(i, float(deg))
+                self._set_goal(i, target)
+            except Exception as exc:
                 self.get_logger().warning(f'[ID {i}] cmd_turn failed: {exc}')
+
+    def _set_goal(self, dxl_id: int, target_deg: float) -> None:
+        self._goal[dxl_id] = target_deg
+        self._reached.discard(dxl_id)
+        self.get_logger().info(f'[ID {dxl_id}] goal set: {target_deg:.1f} deg')
 
     # -- telemetry --------------------------------------------------------
     def _publish_joint_states(self) -> None:
@@ -154,17 +169,30 @@ class U2D2Node(Node):
         positions, velocities = [], []
         for i in self._ids:
             try:
-                positions.append(self._driver.present_position_deg(i) * DEG2RAD)
-                velocities.append(self._driver.present_velocity_rpm(i) * RPM2RADPS)
-            except RuntimeError as exc:
-                # A dropped telemetry read is non-fatal; skip this tick.
+                pos_deg = self._driver.present_position_deg(i)
+                vel_rpm = self._driver.present_velocity_rpm(i)
+            except Exception as exc:
+                # A dropped telemetry read is non-fatal; skip this tick. The
+                # driver self-heals the bus, so the next tick usually succeeds.
                 self.get_logger().warning(
                     f'[ID {i}] telemetry read failed: {exc}',
                     throttle_duration_sec=5.0)
                 return
+            positions.append(pos_deg * DEG2RAD)
+            velocities.append(vel_rpm * RPM2RADPS)
+            self._check_reached(i, pos_deg)
         msg.position = positions
         msg.velocity = velocities
         self._js_pub.publish(msg)
+
+    def _check_reached(self, dxl_id: int, pos_deg: float) -> None:
+        """Log once when a motor arrives within tolerance of its active goal."""
+        goal = self._goal.get(dxl_id)
+        if goal is None or dxl_id in self._reached:
+            return
+        if abs(pos_deg - goal) <= self._goal_tol_deg:
+            self._reached.add(dxl_id)
+            self.get_logger().info(f'[ID {dxl_id}] reached goal {goal:.1f} deg')
 
     # -- shutdown ---------------------------------------------------------
     def shutdown(self) -> None:

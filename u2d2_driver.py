@@ -111,17 +111,36 @@ class Driver:
             )
 
     def _txrx(self, fn: Callable[[], tuple], retries: int = 3) -> tuple:
-        """Run a *TxRx call, retrying on a comm/packet failure. A lone dropped
-        status packet (USB jitter, motor mid-cycle) shouldn't abort a valid
-        transaction; every register write here is idempotent, so re-issuing is
-        safe. Returns the last result tuple either way -- the caller's _check
-        raises on a genuine, persistent failure."""
-        result = fn()
-        for _ in range(retries - 1):
-            if result[-2] == COMM_SUCCESS and result[-1] == 0:
-                break
-            result = fn()
-        return result
+        """Run a *TxRx call, retrying and recovering the bus on failure.
+
+        Handles two failure modes so a transient glitch can't wedge the bus:
+        - Comm/packet error (a dropped status packet from USB jitter): flush the
+          port and retry. Every register write here is idempotent, so re-issuing
+          is safe.
+        - Serial exception mid-transaction: the SDK sets ``port.is_using`` at the
+          start of a transaction and only clears it on a clean return, so an
+          exception leaves it stuck ``True`` -- after which every later call
+          returns COMM_PORT_BUSY ("Port is in use!") until the port is reopened.
+          We clear it before each attempt (safe: callers are single-threaded)
+          so the bus self-heals instead of needing a restart.
+
+        Raises RuntimeError if every attempt raised; otherwise returns the last
+        result tuple for the caller's _check to interpret."""
+        last = None
+        for _ in range(retries):
+            self.port.is_using = False  # clear any stuck busy flag from a prior fault
+            try:
+                last = fn()
+            except Exception:
+                self.port.clearPort()   # drop partial bytes, then retry
+                last = None
+                continue
+            if last[-2] == COMM_SUCCESS and last[-1] == 0:
+                return last
+            self.port.clearPort()       # drop any stale/partial reply before retrying
+        if last is None:
+            raise RuntimeError("serial transaction failed: port error (bus reset)")
+        return last
 
     def write1(self, dxl_id: int, addr: int, value: int, what: str) -> None:
         comm, err = self._txrx(
@@ -193,9 +212,10 @@ class Driver:
     def set_velocity(self, dxl_id: int, rpm: float) -> None:
         self.write4(dxl_id, ADDR_GOAL_VELOCITY, rpm_to_raw(rpm), "set goal velocity")
 
-    def move_shortest_to(self, dxl_id: int, deg: float) -> None:
+    def move_shortest_to(self, dxl_id: int, deg: float) -> float:
         """Command the nearest multi-turn equivalent of `deg` (mod 360), so the
-        motor takes the shortest path. Requires extended position mode."""
+        motor takes the shortest path. Requires extended position mode.
+        Returns the absolute goal in degrees (unwrapped)."""
         present = to_signed32(self.read4(dxl_id, ADDR_PRESENT_POSITION,
                                          "read present position"))
         delta = (deg - pulse_to_deg(present)) % 360.0
@@ -203,6 +223,7 @@ class Driver:
             delta -= 360.0
         goal = present + int(round(delta / 360.0 * PULSES_PER_REV))
         self.write4(dxl_id, ADDR_GOAL_POSITION, goal, "set goal position")
+        return pulse_to_deg(goal)
 
     def turn_by(self, dxl_id: int, deg: float) -> float:
         """Rotate `deg` relative to the present position (negative = reverse),
