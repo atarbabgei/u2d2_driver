@@ -1,8 +1,7 @@
 # u2d2-driver
 
 Velocity and position driver for a ROBOTIS **U2D2** driving **Dynamixel
-X-series** servos over Protocol 2.0. Tested with the XL330-M288; other
-X-series motors (XL430, XM430, …) share the same control table.
+X-series** servos over Protocol 2.0. Tested on the XL330-M288 and XC330-M288.
 
 ## Install
 
@@ -41,7 +40,11 @@ uv run python u2d2_driver.py --id 1 2 --pos 0 90           # per-motor: ID1 → 
 uv run python u2d2_driver.py --id 1 --pos 270 --profile-vel 30  # travel at 30 rpm
 uv run python u2d2_driver.py --id 1 --pos 0 --release      # move, then go limp
 
-uv run python u2d2_driver.py --port COM4 --id 1 --vel 3    # explicit port (Windows)
+uv run python u2d2_driver.py --id 1 --turn 720             # spin 2 full turns from here, hold
+uv run python u2d2_driver.py --id 1 --turn -360            # one turn backward
+uv run python u2d2_driver.py --id 1 2 --turn 720 1080      # per-motor relative turns
+
+uv run python u2d2_driver.py --port /dev/ttyUSB0 --baud 57600 --id 1 --vel 3  # explicit port + baud (Linux)
 uv run python u2d2_driver.py --id 1 --set-id 2             # change motor ID 1 → 2
 ```
 
@@ -54,17 +57,21 @@ uv run python u2d2_driver.py --id 1 --set-id 2             # change motor ID 1 �
 | `--id`          | `1`         | One or more motor IDs (`--id 1 2 3`).            |
 | `--vel`         | —           | Velocity mode: goal rpm (signed). One value for all motors, or one per `--id`. |
 | `--pos`         | —           | Position mode: goal degrees (0–360). One value for all motors, or one per `--id`. |
+| `--turn`        | —           | Position mode: rotate this many degrees relative to the current position (signed; full magnitude kept, so `720` = two turns). One value for all motors, or one per `--id`. |
 | `--profile-vel` | max         | Position mode: travel speed in rpm.              |
 | `--duration`    | run forever | Stop after N seconds.                            |
 | `--release`     | hold        | Position mode: disable torque on exit.           |
 | `--scan`        | —           | List motor IDs on the bus and exit. Without `--baud`, probes every common baud and reports which baud each motor answered on. |
 | `--set-id`      | —           | Change a motor's ID (`--id` = its current ID).   |
 
-`--vel` and `--pos` are mutually exclusive; the driver sets the motor's
-operating mode automatically. Position moves always take the **shortest
-path** to the target (e.g. 359° → 0° moves +1°, not −359°). On exit (including Ctrl+C) it always secures
-the motor: velocity mode stops and releases torque, position mode holds the
-target unless `--release` is passed.
+`--vel`, `--pos`, and `--turn` are mutually exclusive; the driver sets the
+motor's operating mode automatically. `--pos` always takes the **shortest
+path** to the target (e.g. 359° → 0° moves +1°, not −359°); use `--turn` when
+you want a specific multi-turn rotation by its full magnitude (it runs the
+motor in the same multi-turn extended-position mode and adds the requested
+degrees to the current position). On exit (including Ctrl+C) it always secures
+the motor: velocity mode stops and releases torque, position moves (`--pos`
+and `--turn`) hold the target unless `--release` is passed.
 
 ### Assigning IDs (two motors on one bus)
 

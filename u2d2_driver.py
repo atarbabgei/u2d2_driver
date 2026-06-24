@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Velocity + position driver for ROBOTIS U2D2 + Dynamixel X-series (Protocol 2.0).
 
-Tested with the XL330-M288. See README.md for install and usage, or run --help.
+Tested with the XL330-M288 and XC330-M288. See README.md for usage, or --help.
 """
 
 from __future__ import annotations
@@ -110,23 +110,45 @@ class Driver:
                 f"[ID {dxl_id}] {what}: {self.packet.getRxPacketError(err)}"
             )
 
+    def _txrx(self, fn: Callable[[], tuple], retries: int = 3) -> tuple:
+        """Run a *TxRx call, retrying on a comm/packet failure. A lone dropped
+        status packet (USB jitter, motor mid-cycle) shouldn't abort a valid
+        transaction; every register write here is idempotent, so re-issuing is
+        safe. Returns the last result tuple either way -- the caller's _check
+        raises on a genuine, persistent failure."""
+        result = fn()
+        for _ in range(retries - 1):
+            if result[-2] == COMM_SUCCESS and result[-1] == 0:
+                break
+            result = fn()
+        return result
+
     def write1(self, dxl_id: int, addr: int, value: int, what: str) -> None:
-        comm, err = self.packet.write1ByteTxRx(self.port, dxl_id, addr, value)
+        comm, err = self._txrx(
+            lambda: self.packet.write1ByteTxRx(self.port, dxl_id, addr, value))
         self._check(dxl_id, comm, err, what)
 
     def write4(self, dxl_id: int, addr: int, value: int, what: str) -> None:
-        comm, err = self.packet.write4ByteTxRx(self.port, dxl_id, addr, value)
+        comm, err = self._txrx(
+            lambda: self.packet.write4ByteTxRx(self.port, dxl_id, addr, value))
         self._check(dxl_id, comm, err, what)
 
     def read4(self, dxl_id: int, addr: int, what: str) -> int:
-        value, comm, err = self.packet.read4ByteTxRx(self.port, dxl_id, addr)
+        value, comm, err = self._txrx(
+            lambda: self.packet.read4ByteTxRx(self.port, dxl_id, addr))
         self._check(dxl_id, comm, err, what)
         return value
 
     # -- discovery --------------------------------------------------------
-    def ping(self, dxl_id: int) -> bool:
-        _, comm, err = self.packet.ping(self.port, dxl_id)
-        return comm == COMM_SUCCESS and err == 0
+    def ping(self, dxl_id: int, retries: int = 3) -> bool:
+        """Ping a motor, retrying a few times. A single status packet is
+        cheap to lose to USB scheduling jitter at low baud, so one dropped
+        reply shouldn't read as 'motor absent' -- retry before giving up."""
+        for _ in range(retries):
+            _, comm, err = self.packet.ping(self.port, dxl_id)
+            if comm == COMM_SUCCESS and err == 0:
+                return True
+        return False
 
     def scan(self) -> list[int]:
         """Broadcast-ping the bus and return the IDs that answer."""
@@ -181,6 +203,16 @@ class Driver:
             delta -= 360.0
         goal = present + int(round(delta / 360.0 * PULSES_PER_REV))
         self.write4(dxl_id, ADDR_GOAL_POSITION, goal, "set goal position")
+
+    def turn_by(self, dxl_id: int, deg: float) -> float:
+        """Rotate `deg` relative to the present position (negative = reverse),
+        keeping the full magnitude -- e.g. 720 is two turns, not 0. Requires
+        extended position mode. Returns the absolute goal in degrees."""
+        present = to_signed32(self.read4(dxl_id, ADDR_PRESENT_POSITION,
+                                         "read present position"))
+        goal = present + int(round(deg / 360.0 * PULSES_PER_REV))
+        self.write4(dxl_id, ADDR_GOAL_POSITION, goal, "set goal position")
+        return pulse_to_deg(goal)
 
     def present_velocity_rpm(self, dxl_id: int) -> float:
         raw = to_signed32(self.read4(dxl_id, ADDR_PRESENT_VELOCITY, "read present velocity"))
@@ -246,14 +278,33 @@ def per_id(values: list[float], ids: list[int]) -> dict[int, float] | None:
 
 def monitor(ids: list[int], sample: Callable[[int], float], fmt: str, label: str,
             duration: float | None,
-            until: Callable[[dict[int, float]], bool] | None = None) -> None:
+            until: Callable[[dict[int, float]], bool] | None = None,
+            max_read_failures: int = 6) -> None:
     """Poll `sample(id)` every 0.5 s and print the readings. Stops after
     `duration` seconds if given, else when `until(values)` is true (or
-    never, if `until` is None)."""
+    never, if `until` is None).
+
+    A dropped telemetry read is non-fatal: the motor keeps moving/holding
+    regardless, so a failed poll only warns and retries on the next tick.
+    Give up (raising) only after `max_read_failures` consecutive failed polls,
+    which means the motor is likely unpowered or unplugged."""
     start = time.monotonic()
+    failures = 0
     while True:
         time.sleep(0.5)
-        values = {i: sample(i) for i in ids}
+        try:
+            values = {i: sample(i) for i in ids}
+        except RuntimeError as exc:
+            failures += 1
+            print(f"warning: telemetry read failed "
+                  f"({failures}/{max_read_failures}): {exc}", file=sys.stderr)
+            if failures >= max_read_failures:
+                raise RuntimeError(
+                    f"lost contact with motor(s) after {max_read_failures} "
+                    "consecutive read failures -- check power and wiring."
+                ) from exc
+            continue
+        failures = 0
         readings = ", ".join(f"ID{i}={fmt.format(v)}" for i, v in values.items())
         print(f"present {label}: {readings}")
         if duration is not None:
@@ -308,6 +359,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                       help="Position mode: goal position in degrees (0..360); "
                            "moves take the shortest path. "
                            "One value for all motors, or one per --id.")
+    mode.add_argument("--turn", type=float, nargs="+", metavar="DEG",
+                      help="Position mode: rotate this many degrees relative to "
+                           "the current position (negative = reverse), keeping "
+                           "full magnitude (720 = two turns). "
+                           "One value for all motors, or one per --id.")
     p.add_argument("--profile-vel", type=float, default=None, metavar="RPM",
                    help="Position mode: travel speed in rpm (0/unset = max).")
     p.add_argument("--duration", type=float, default=None,
@@ -327,6 +383,7 @@ def main(argv: list[str] | None = None) -> int:
 
     port = args.port or autodetect_port()
     driver = Driver(port, args.baud if args.baud is not None else COMMON_BAUDS[0])
+    exit_code = 0
     try:
         if args.scan:
             if args.baud is not None:
@@ -363,9 +420,9 @@ def main(argv: list[str] | None = None) -> int:
                             "current ID).", 2)
             return run_set_id(driver, args.id[0], args.set_id)
 
-        if args.vel is None and args.pos is None:
-            return fail("pass --vel <rpm> or --pos <deg>. Use --scan to list "
-                        "motors.", 2)
+        if args.vel is None and args.pos is None and args.turn is None:
+            return fail("pass --vel <rpm>, --pos <deg>, or --turn <deg>. "
+                        "Use --scan to list motors.", 2)
 
         # Confirm each requested motor is present.
         for dxl_id in args.id:
@@ -373,9 +430,12 @@ def main(argv: list[str] | None = None) -> int:
                 return fail(f"motor ID {dxl_id} did not respond. "
                             f"Check power, ID, and baud.")
 
-        goals = per_id(args.vel if args.vel is not None else args.pos, args.id)
+        requested = (args.vel if args.vel is not None else
+                     args.pos if args.pos is not None else args.turn)
+        goals = per_id(requested, args.id)
         if goals is None:
-            flag = "--vel" if args.vel is not None else "--pos"
+            flag = ("--vel" if args.vel is not None else
+                    "--pos" if args.pos is not None else "--turn")
             return fail(f"{flag} takes one value for all motors or one per "
                         f"--id ({len(args.id)} ids given).", 2)
 
@@ -394,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
 
             monitor(args.id, driver.present_velocity_rpm, "{:+.2f}",
                     "velocity (rpm)", args.duration)
-        else:
+        elif args.pos is not None:
             # --- Position mode: shortest path to target degrees, hold. ---
             speed = f"{args.profile_vel} rpm" if args.profile_vel else "max"
             for dxl_id, deg in goals.items():
@@ -409,16 +469,39 @@ def main(argv: list[str] | None = None) -> int:
                     "{:.1f}", "position (deg)", args.duration,
                     until=lambda degs: all(ang_diff_deg(degs[i], t) < 1.0
                                            for i, t in targets.items()))
+        else:
+            # --- Position mode: relative multi-turn rotation, hold. The goal
+            # may span many turns, so track the *unwrapped* present position
+            # (not mod 360) against the absolute goal. ---
+            speed = f"{args.profile_vel} rpm" if args.profile_vel else "max"
+            targets: dict[int, float] = {}
+            for dxl_id, deg in goals.items():
+                driver.enable_position_mode(dxl_id)
+                if args.profile_vel is not None:
+                    driver.set_profile_velocity(dxl_id, args.profile_vel)
+                targets[dxl_id] = driver.turn_by(dxl_id, deg)
+                print(f"[ID {dxl_id}] turn {deg} deg -> goal "
+                      f"{targets[dxl_id]:.1f} deg (travel {speed})")
+
+            monitor(args.id, driver.present_position_deg,
+                    "{:.1f}", "position (deg)", args.duration,
+                    until=lambda degs: all(abs(degs[i] - t) < 1.0
+                                           for i, t in targets.items()))
 
     except KeyboardInterrupt:
         print("\ninterrupted -- stopping motors.")
+    except RuntimeError as exc:
+        # A persistent bus failure (motor unplugged/unpowered mid-run) bubbles
+        # up here. Report it cleanly instead of dumping a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        exit_code = 1
     finally:
-        # Velocity mode always releases torque on exit; position mode holds
-        # the target unless --release was passed.
-        driver.stop_all(disable_torque=args.pos is None or args.release)
+        # Velocity mode always releases torque on exit; position moves (--pos
+        # and --turn) hold the target unless --release was passed.
+        driver.stop_all(disable_torque=args.vel is not None or args.release)
         driver.close()
 
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
