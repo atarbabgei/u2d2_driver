@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>u2d2_px4_ros</name>
+  <version>0.1.0</version>
+  <description>PX4 RC relay for u2d2_driver (maps /fmu/out/input_rc to a Dynamixel actuator)</description>
+  <maintainer email="atarbabgei@gmail.com">Atar Babgei</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>colcon_uv</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>px4_msgs</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

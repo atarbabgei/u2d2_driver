@@ -78,12 +78,24 @@ class U2D2Node(Node):
         self._reached: set[int] = set()
         self._goal_tol_deg = 1.0
 
+        # Boot position per id (deg) == logical 0 for absolute (cmd_abs) moves,
+        # so "wherever it starts" is the zero reference. Reading the present
+        # position works regardless of mode/torque.
+        self._origin: dict[int, float] = {}
+        for i in self._ids:
+            try:
+                self._origin[i] = self._driver.present_position_deg(i)
+            except Exception:
+                self._origin[i] = 0.0
+
         self.create_subscription(Float64MultiArray, 'cmd_velocity',
                                  self._on_velocity, 10)
         self.create_subscription(Float64MultiArray, 'cmd_position',
                                  self._on_position, 10)
         self.create_subscription(Float64MultiArray, 'cmd_turn',
                                  self._on_turn, 10)
+        self.create_subscription(Float64MultiArray, 'cmd_abs',
+                                 self._on_abs, 10)
 
         self._js_pub = self.create_publisher(JointState, 'joint_states', 10)
         self._names = [f'id_{i}' for i in self._ids]
@@ -176,6 +188,22 @@ class U2D2Node(Node):
                 self._set_goal(i, target)
             except Exception as exc:
                 self.get_logger().warning(f'[ID {i}] cmd_turn failed: {exc}')
+
+    def _on_abs(self, msg: Float64MultiArray) -> None:
+        """Absolute multi-turn move relative to the boot origin: value 0 returns
+        to where the motor was at startup, regardless of present position. This
+        is drift-free under streaming (e.g. an RC relay), unlike cmd_turn whose
+        deltas accumulate on the live present position."""
+        goals = self._expand(msg.data, 'cmd_abs')
+        if goals is None:
+            return
+        for i, deg in goals.items():
+            try:
+                self._ensure_mode(i, OP_MODE_EXTENDED_POSITION)
+                target = self._driver.move_to_deg(i, self._origin[i] + float(deg))
+                self._set_goal(i, target)
+            except Exception as exc:
+                self.get_logger().warning(f'[ID {i}] cmd_abs failed: {exc}')
 
     def _set_goal(self, dxl_id: int, target_deg: float) -> None:
         self._goal[dxl_id] = target_deg

@@ -248,6 +248,16 @@ class Driver:
         self.write4(dxl_id, ADDR_GOAL_POSITION, goal, "set goal position")
         return pulse_to_deg(goal)
 
+    def move_to_deg(self, dxl_id: int, deg: float) -> float:
+        """Move to the absolute multi-turn position `deg` (unwrapped, full
+        magnitude -- e.g. 700 is ~1.94 turns from the motor's zero, not wrapped
+        to 0/360). Unlike turn_by, the goal does not depend on the present
+        position, so streaming the same target is idempotent and drift-free.
+        Requires extended position mode. Returns the absolute goal in degrees."""
+        goal = int(round(deg / 360.0 * PULSES_PER_REV))
+        self.write4(dxl_id, ADDR_GOAL_POSITION, goal, "set goal position")
+        return pulse_to_deg(goal)
+
     def present_velocity_rpm(self, dxl_id: int) -> float:
         raw = to_signed32(self.read4(dxl_id, ADDR_PRESENT_VELOCITY, "read present velocity"))
         return raw_to_rpm(raw)

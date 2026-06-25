@@ -50,6 +50,7 @@ motors.
 | `/u2d2/cmd_velocity`   | `Float64MultiArray` (rpm)   | Velocity mode; signed rpm per motor.          |
 | `/u2d2/cmd_position`   | `Float64MultiArray` (deg)   | Position mode; absolute 0–360°, shortest path.|
 | `/u2d2/cmd_turn`       | `Float64MultiArray` (deg)   | Relative multi-turn rotation (720 = 2 turns). |
+| `/u2d2/cmd_abs`        | `Float64MultiArray` (deg)   | Absolute multi-turn from the boot origin (0 = startup position). Drift-free under streaming. |
 | `/u2d2/joint_states`   | `sensor_msgs/JointState`    | Telemetry: position (rad), velocity (rad/s).  |
 
 The node switches each motor's operating mode automatically and only when it
@@ -67,6 +68,10 @@ ros2 topic pub -1 /u2d2/cmd_position std_msgs/Float64MultiArray "{data: [90]}"
 # rotate two full turns from current position
 ros2 topic pub -1 /u2d2/cmd_turn std_msgs/Float64MultiArray "{data: [720]}"
 
+# absolute: go to 700° from the boot position, then back to the boot position
+ros2 topic pub -1 /u2d2/cmd_abs std_msgs/Float64MultiArray "{data: [700]}"
+ros2 topic pub -1 /u2d2/cmd_abs std_msgs/Float64MultiArray "{data: [0]}"
+
 # two motors: ID1 -10 rpm, ID2 +20 rpm
 ros2 topic pub -1 /u2d2/cmd_velocity std_msgs/Float64MultiArray "{data: [-10, 20]}"
 
@@ -77,6 +82,10 @@ ros2 topic echo /u2d2/joint_states
 ## Notes
 
 - `joint_states` uses SI units (rad, rad/s); command topics use deg/rpm.
+- `cmd_abs` is referenced to the position captured at node startup (logical 0);
+  restart the node to re-zero it where the motor currently sits. Prefer `cmd_abs`
+  over `cmd_turn` for streamed setpoints — relative deltas accumulate on the live
+  present position and drift, absolute targets do not.
 - The node is single-threaded by design so the serial bus is only ever
   accessed by one callback at a time.
 - Linux serial access: `sudo usermod -aG dialout $USER` (log out/in once).
